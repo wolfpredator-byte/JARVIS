@@ -1,5 +1,6 @@
 import subprocess
 import shutil
+import json
 from pathlib import Path
 
 
@@ -14,23 +15,36 @@ APP_PATHS = {
 def open_application(app_name: str) -> bool:
     app_name = app_name.strip().lower()
 
-    # 1. Controlla il nostro registro personale
     if app_name in APP_PATHS:
         app_path = Path(APP_PATHS[app_name])
 
         if app_path.exists():
-            subprocess.Popen([str(app_path)])
+            subprocess.Popen(
+                [str(app_path)],
+                creationflags=(
+                    subprocess.DETACHED_PROCESS
+                    | subprocess.CREATE_NEW_PROCESS_GROUP
+                )
+            )
+
             return True
 
-        print(f"Percorso non trovato: {app_path}")
         return False
 
-    # 2. Cerca l'eseguibile nel PATH di Windows
     app_path = shutil.which(app_name)
 
     if app_path:
-        subprocess.Popen([app_path])
+        subprocess.Popen(
+            [app_path],
+            creationflags=(
+                subprocess.DETACHED_PROCESS
+                | subprocess.CREATE_NEW_PROCESS_GROUP
+            )
+        )
+
         return True
+
+    return False
 
     # 3. Ultimo tentativo tramite Windows
     try:
