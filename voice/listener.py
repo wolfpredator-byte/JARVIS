@@ -13,7 +13,7 @@ class VoiceListener:
         print("Caricamento modello vocale...")
 
         self.model = WhisperModel(
-            "base",
+            "small",
             device="cpu",
             compute_type="int8"
         )
@@ -37,10 +37,16 @@ class VoiceListener:
         audio = np.squeeze(audio)
 
         segments, info = self.model.transcribe(
-            audio,
-            language="it",
-            beam_size=5
-        )
+    audio,
+    language="it",
+    beam_size=5,
+    initial_prompt=(
+        "Jarvis è un assistente per computer. "
+        "Comandi comuni: Jarvis apri Blender, "
+        "Jarvis apri Visual Studio Code, "
+        "Jarvis apri Notepad, Jarvis apri Calc."
+    )
+)
 
         text = ""
 
