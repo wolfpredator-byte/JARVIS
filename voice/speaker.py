@@ -1,4 +1,5 @@
 import pyttsx3
+from typing import Any, cast
 
 
 class VoiceSpeaker:
@@ -11,16 +12,24 @@ class VoiceSpeaker:
         self._set_italian_voice()
 
     def _set_italian_voice(self):
-        voices = self.engine.getProperty("voices")
+        voices = cast(
+            list[Any],
+            self.engine.getProperty("voices")
+        )
 
         for voice in voices:
-            name = voice.name.lower()
+            name = str(getattr(voice, "name", "")).lower()
+
+            raw_languages = getattr(voice, "languages", []) or []
+
+            if not isinstance(raw_languages, (list, tuple)):
+                raw_languages = [raw_languages]
 
             languages = " ".join(
                 lang.decode(errors="ignore")
                 if isinstance(lang, bytes)
                 else str(lang)
-                for lang in getattr(voice, "languages", [])
+                for lang in raw_languages
             ).lower()
 
             if (
@@ -29,13 +38,12 @@ class VoiceSpeaker:
                 or "it-it" in languages
             ):
                 self.engine.setProperty("voice", voice.id)
-
                 print(f"Voce italiana selezionata: {voice.name}")
                 return
 
         print(
             "ATTENZIONE: nessuna voce italiana trovata. "
-            "Uso la voce predefinita di Windows."
+            "Uso la voce predefinita."
         )
 
     def speak(self, text: str):

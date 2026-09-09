@@ -1,8 +1,8 @@
-import time
-
 from core.router import handle_command
+
 from voice.listener import VoiceListener
 from voice.speaker import VoiceSpeaker
+from voice.wakeword import WakeWordListener
 
 
 def main():
@@ -11,64 +11,40 @@ def main():
 
     listener = VoiceListener()
     speaker = VoiceSpeaker()
+    wakeword = WakeWordListener()
 
-    last_voice_end = 0.0
+    speaker.speak("Sistema online.")
 
     while True:
         try:
-            user_input = input(
-                "\n[V] Parla | [Q] Esci | oppure scrivi un comando: "
-            ).strip()
+            # Rimane in attesa finché non sente la wake word
+            wakeword.wait_for_wake_word()
 
-            print(f"[DEBUG INPUT]: {repr(user_input)}")
+            print("JARVIS: Ti ascolto.")
 
-            # Uscita
-            if user_input.lower() in ["q", "quit", "exit"]:
-                print("JARVIS: Sistema offline.")
-                break
+            # Ora ascolta il comando vero
+            command = listener.listen()
 
-            # Modalità vocale
-            if user_input.lower() == "v":
-
-                # Blocca eventuale V duplicata rimasta nel buffer
-                now = time.monotonic()
-
-                if now - last_voice_end < 1.0:
-                    print("[DEBUG] Trigger vocale duplicato ignorato.")
-                    continue
-
-                command = listener.listen()
-
-                # Salviamo il momento in cui l'ascolto è terminato
-                last_voice_end = time.monotonic()
-
-                if not command:
-                    print("JARVIS: Non ho rilevato alcun comando.")
-                    continue
-
-            # Input vuoto
-            elif user_input == "":
+            if not command:
+                print("JARVIS: Nessun comando rilevato.")
                 continue
 
-            # Comando scritto
-            else:
-                command = user_input
+            command_lower = command.lower().strip()
 
-            # Spegnimento tramite voce/testo
-            if command.lower() in [
+            if command_lower in [
                 "esci",
                 "chiudi",
-                "exit",
-                "jarvis chiudi",
-                "jarvis, chiudi"
+                "spegniti",
+                "termina",
+                "sistema offline"
             ]:
-                print("JARVIS: Sistema offline.")
+                speaker.speak("Sistema offline.")
                 break
 
             response = handle_command(command)
 
             speaker.speak(response)
-            
+
         except KeyboardInterrupt:
             print("\nJARVIS: Sistema offline.")
             break
