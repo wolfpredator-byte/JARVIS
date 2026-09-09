@@ -2,6 +2,7 @@ import time
 
 from core.router import handle_command
 from voice.listener import VoiceListener
+from voice.speaker import VoiceSpeaker
 
 
 def main():
@@ -9,6 +10,7 @@ def main():
     print("System online.")
 
     listener = VoiceListener()
+    speaker = VoiceSpeaker()
 
     last_voice_end = 0.0
 
@@ -65,8 +67,8 @@ def main():
 
             response = handle_command(command)
 
-            print(f"JARVIS: {response}")
-
+            speaker.speak(response)
+            
         except KeyboardInterrupt:
             print("\nJARVIS: Sistema offline.")
             break
