@@ -1,70 +1,84 @@
-from typing import Any, cast
+import win32com.client
 
-import pyttsx3
+
+# SAPI speech flags
+SPEAK_ASYNC = 1
+PURGE_BEFORE_SPEAK = 2
 
 
 class VoiceSpeaker:
     def __init__(self):
-        self.voice_id = self._find_italian_voice()
-
-    def _find_italian_voice(self):
-        engine = pyttsx3.init()
-
-        voices = cast(
-            list[Any],
-            engine.getProperty("voices")
+        self.voice = win32com.client.Dispatch(
+            "SAPI.SpVoice"
         )
 
-        selected_voice = None
+        self.voice.Volume = 100
 
-        for voice in voices:
-            name = str(getattr(voice, "name", "")).lower()
+        # SAPI usa una scala diversa da pyttsx3:
+        # circa -10 / +10
+        self.voice.Rate = 0
 
-            raw_languages = getattr(voice, "languages", []) or []
+        self._set_italian_voice()
 
-            if not isinstance(raw_languages, (list, tuple)):
-                raw_languages = [raw_languages]
+    def _set_italian_voice(self):
+        voices = self.voice.GetVoices()
 
-            languages = " ".join(
-                lang.decode(errors="ignore")
-                if isinstance(lang, bytes)
-                else str(lang)
-                for lang in raw_languages
-            ).lower()
+        for index in range(voices.Count):
+            token = voices.Item(index)
+
+            description = (
+                token.GetDescription()
+                .lower()
+            )
+
+            try:
+                language = (
+                    token.GetAttribute("Language")
+                    .lower()
+                )
+            except Exception:
+                language = ""
 
             if (
-                "italian" in name
-                or "italiano" in name
-                or "it-it" in languages
+                "italian" in description
+                or "italiano" in description
+                or language in ["410", "0410"]
             ):
-                selected_voice = voice.id
-                print(f"Voce italiana selezionata: {voice.name}")
-                break
+                self.voice.Voice = token
 
-        engine.stop()
+                print(
+                    "Voce italiana selezionata: "
+                    f"{token.GetDescription()}"
+                )
 
-        return selected_voice
+                return
+
+        print(
+            "[TTS] Nessuna voce italiana "
+            "identificata automaticamente."
+        )
 
     def speak(self, text: str):
         if not text:
             return
 
-        print(f"JARVIS: {text}")
+        # Cancella una frase precedente,
+        # poi parte in background
+        self.stop()
 
+        self.voice.Speak(
+            text,
+            SPEAK_ASYNC
+        )
+
+    def stop(self):
         try:
-            # Ricreiamo il motore per evitare problemi
-            # dopo l'utilizzo del microfono
-            engine = pyttsx3.init()
-
-            engine.setProperty("rate", 175)
-            engine.setProperty("volume", 1.0)
-
-            if self.voice_id:
-                engine.setProperty("voice", self.voice_id)
-
-            engine.say(text)
-            engine.runAndWait()
-            engine.stop()
+            self.voice.Speak(
+                "",
+                SPEAK_ASYNC | PURGE_BEFORE_SPEAK
+            )
 
         except Exception as error:
-            print(f"[TTS ERROR]: {error}")
+            print(
+                f"[TTS STOP ERROR]: {error}"
+            )

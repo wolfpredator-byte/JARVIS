@@ -9,7 +9,11 @@ from tools.projects import (
     open_project_folder,
     list_project_files,
     read_project_file,
-    write_project_file
+    find_file_in_project,
+    find_project_path,
+    write_project_file,
+    restore_project_file
+    
 )
 from tools.diagnostics import (
     get_file_diagnostics,
@@ -17,7 +21,15 @@ from tools.diagnostics import (
 )
 from core.ai import (
     analyze_code,
-    generate_code_fix
+    generate_code_patch,
+)
+from tools.code_patch import (
+    validate_patch,
+    apply_patch
+)
+from core.response import (
+    JarvisResponse,
+    build_spoken_summary
 )
 
 
@@ -212,7 +224,7 @@ def handle_command(command: str):
     )
 
     # ----------------------------
-    # CONFERMA FIX
+    # CONFERMA PATCH
     # ----------------------------
 
     confirmation_phrases = [
@@ -225,26 +237,54 @@ def handle_command(command: str):
     ]
 
     if (
-        session.pending_fix is not None
+        session.pending_patch is not None
         and any(
             phrase == command
             or phrase in command
             for phrase in confirmation_phrases
         )
     ):
+
         if not session.last_project or not session.last_file:
             return "Ho perso il contesto della modifica."
 
-        success = write_project_file(
+        # Ultimo controllo PRIMA della modifica
+        valid, error = validate_patch(
             session.last_project,
-            session.last_file,
-            session.pending_fix
+            session.pending_patch
+        )
+
+        if not valid:
+            session.pending_patch = None
+            session.pending_original_content = None
+
+            print(
+                f"[PATCH ERROR]: {error}"
+            )
+
+            return (
+                "La patch non è più applicabile. "
+                "Non ho modificato il file."
+            )
+
+        success, error = apply_patch(
+            session.last_project,
+            session.pending_patch
         )
 
         if not success:
-            return "Non sono riuscito a modificare il file."
+            print(
+                f"[PATCH APPLY ERROR]: {error}"
+            )
 
-        session.pending_fix = None
+            return (
+                "Non sono riuscito ad applicare "
+                "la modifica."
+            )
+
+        # ----------------------------
+        # VERIFICA CON PYRIGHT
+        # ----------------------------
 
         diagnostics = get_file_diagnostics(
             session.last_project,
@@ -262,27 +302,41 @@ def handle_command(command: str):
 
         session.last_diagnostics = diagnostics_text
 
+        # Conserviamo queste prima di svuotare
+        # la sessione
+        original_content = (
+            session.pending_original_content
+        )
+
+        session.pending_patch = None
+        session.pending_original_content = None
+
         if not diagnostics:
             return (
-                "Correzione applicata. "
-                "Pyright non rileva più problemi nel file."
+                "Modifica applicata. "
+                "Pyright non rileva più problemi."
             )
 
+        # La patch non ha risolto tutto.
+        # Per ora NON rollbackiamo automaticamente,
+        # ma Jarvis lo segnala.
         return (
-            "Ho applicato la correzione, "
+            "Ho applicato la modifica, "
             f"ma Pyright segnala ancora "
-            f"{len(diagnostics)} problemi."
+            f"{len(diagnostics)} problemi. "
+            "La correzione deve essere ricontrollata."
         )
 
     # ----------------------------
-    # PREPARA FIX
-    # ---------------------------- 
+    # PREPARA PATCH
+    # ----------------------------
 
     if (
         similar_to(command, "sistemalo")
         or "correggilo" in command
         or "risolvi il problema" in command
     ):
+
         if not session.last_project or not session.last_file:
             return (
                 "Non ho un problema precedente "
@@ -293,32 +347,89 @@ def handle_command(command: str):
             session.last_project,
             session.last_file
         )
-
+ 
         if code is None:
             return "Non riesco a leggere il file."
 
-        fix = generate_code_fix(
+        file_path = find_file_in_project(
+            session.last_project,
+            session.last_file
+        )
+
+        project_path = find_project_path(
+            session.last_project
+        )
+
+        if file_path is None or project_path is None:
+            return "Non riesco a determinare il percorso del file."
+
+        relative_file_path = (
+            file_path
+            .relative_to(project_path)
+            .as_posix()
+        )
+
+        print(
+            f"[PATCH TARGET]: {relative_file_path}"
+        )
+ 
+        patch = generate_code_patch(
             code=code,
             file_name=session.last_file,
+            relative_file_path=relative_file_path,
             project_name=session.last_project,
             diagnostics=(
                 session.last_diagnostics
                 or "Nessuna diagnostica disponibile."
-            )
+             )
         )
 
-        if not fix:
+        if not patch:
             return (
                 "Non sono riuscito a preparare "
-                "la correzione."
+                "una correzione."
             )
 
-        session.pending_fix = fix
+        valid, error = validate_patch(
+            session.last_project,
+            patch,
+            expected_file=relative_file_path
+        )
+
+        if not valid:
+            print(
+                "\n[PATCH NON VALIDA]\n"
+                + patch
+                + "\n\n[ERRORE]\n"
+                + error
+            )
+
+            return (
+                "Ho generato una correzione, "
+                "ma non supera il controllo di sicurezza. "
+                "Non ho modificato nessun file."
+            )
+
+        # Conserviamo il file originale
+        session.pending_original_content = code
+        session.pending_patch = patch
+
+        print(
+            "\n"
+            + "=" * 60
+            + "\nPATCH PROPOSTA\n"
+            + "=" * 60
+            + "\n"
+            + patch
+            + "\n"
+            + "=" * 60
+        )
 
         return (
-            f"Ho preparato una correzione per "
+            f"Ho preparato una modifica per "
             f"{session.last_file}. "
-            "Vuoi che la applichi?"
+            "La patch è valida e te l'ho mostrata "
+            "nel terminale. Vuoi che la applichi?"
         )
 
     # ----------------------------
@@ -535,20 +646,17 @@ def handle_command(command: str):
         session.last_request = command
         session.last_diagnostics = diagnostics_text
         session.last_ai_response = response
-        
 
-        print(
-            "\n"
-            + "=" * 60
-            + "\nJARVIS AI\n"
-            + "=" * 60
-            + "\n"
-            + response
-            + "\n"
-            + "=" * 60
+        spoken_response = build_spoken_summary(
+            full_text=response,
+            file_name=context.current_file,
+            issue_count=len(diagnostics)
         )
 
-        return response
+        return JarvisResponse(
+            display=response,
+            speech=spoken_response
+        )
 
     # ----------------------------
     # APERTURA APPLICAZIONI

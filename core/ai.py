@@ -90,9 +90,10 @@ Regole:
             "modello di intelligenza artificiale locale."
         )
 
-def generate_code_fix(
+def generate_code_patch(
     code: str,
     file_name: str,
+    relative_file_path: str,
     project_name: str,
     diagnostics: str
 ) -> str:
@@ -100,27 +101,45 @@ def generate_code_fix(
     system_prompt = """
 Sei il Coding Agent di JARVIS.
 
-Devi correggere il file fornito.
+Devi correggere SOLO il problema indicato.
 
-Regole:
-- Correggi gli errori indicati nella diagnostica.
-- Mantieni invariato tutto il codice non necessario alla correzione.
+REGOLE IMPORTANTISSIME:
+- NON restituire l'intero file.
+- NON riscrivere sezioni che non devono cambiare.
+- Restituisci ESCLUSIVAMENTE una unified diff patch.
+- La patch deve modificare il minor numero possibile di righe.
+- Mantieni tutto il resto del file invariato.
 - Non aggiungere spiegazioni.
-- Non usare blocchi Markdown.
-- Restituisci ESCLUSIVAMENTE il contenuto completo del file corretto.
+- Non usare ``` o blocchi Markdown.
+- Usa ESATTAMENTE il PERCORSO RELATIVO ESATTO fornito.
+- Non utilizzare solamente il nome del file.
+- Le intestazioni della patch devono essere:
+
+--- a/PERCORSO_RELATIVO
++++ b/PERCORSO_RELATIVO
+
+Esempio:
+--- a/tools/app_indexer.py
++++ b/tools/app_indexer.py
+@@ ...
+-riga vecchia
++riga nuova
 """
 
     user_prompt = f"""
 PROGETTO:
 {project_name}
 
-FILE:
+NOME FILE:
 {file_name}
+
+PERCORSO RELATIVO ESATTO:
+{relative_file_path}
 
 DIAGNOSTICA:
 {diagnostics}
 
-CODICE ATTUALE:
+CONTENUTO ATTUALE:
 {code}
 """
 
@@ -144,8 +163,17 @@ CODICE ATTUALE:
         if not content:
             return ""
 
-        return content.strip()
+        patch = content.strip()
+
+        # Nel caso il modello ignori la richiesta
+        # e inserisca comunque markdown.
+        patch = patch.replace("```diff", "")
+        patch = patch.replace("```patch", "")
+        patch = patch.replace("```", "")
+        patch = patch.strip()
+
+        return patch
 
     except Exception as error:
-        print(f"[AI FIX ERROR]: {error}")
-        return ""   
+        print(f"[AI PATCH ERROR]: {error}")
+        return ""
