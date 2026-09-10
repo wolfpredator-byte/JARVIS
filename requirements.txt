@@ -1,2 +1,3 @@
 pyttsx3 
 psutil
+ollama

@@ -1,6 +1,7 @@
 import re
 
 from core.context import get_active_window_context
+from core.ai import analyze_code
 from tools.windows import open_application
 from tools.projects import (
     open_project_folder,
@@ -310,6 +311,74 @@ def handle_command(command: str):
             f"Contiene {line_count} righe. "
             "Ho mostrato il contenuto nel terminale."
        )
+
+    # ----------------------------
+    # CODING ASSISTANT
+    # ----------------------------
+
+    coding_phrases = [
+        "spiegami questo file",
+        "spiegami il file",
+        "analizza questo file",
+        "analizza il file",
+        "controlla questo file",
+        "trova bug",
+        "trova il bug",
+        "cosa non va in questo file",
+        "cosa c'è che non va",
+        "ci sono errori in questo file",
+    ]
+
+    if any(
+        phrase in command
+        for phrase in coding_phrases
+    ):
+        context = get_active_window_context()
+
+        if context is None:
+            return "Non riesco a rilevare il contesto."
+
+        if not context.project_name:
+            return "Non riesco a identificare il progetto."
+
+        if not context.current_file:
+            return "Non riesco a identificare il file aperto."
+
+        content = read_project_file(
+            context.project_name,
+            context.current_file
+        )
+
+        if content is None:
+            return (
+                f"Non riesco a leggere "
+                f"{context.current_file}."
+            )
+
+        print(
+            f"\n[AI] Analisi di "
+            f"{context.current_file}..."
+        )
+
+        response = analyze_code(
+            code=content,
+            file_name=context.current_file,
+            project_name=context.project_name,
+            request=command
+        )
+
+        print(
+            "\n"
+            + "=" * 60
+            + "\nJARVIS AI\n"
+            + "=" * 60
+            + "\n"
+            + response
+            + "\n"
+            + "=" * 60
+        )
+
+        return response
 
     # ----------------------------
     # APERTURA APPLICAZIONI
