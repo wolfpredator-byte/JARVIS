@@ -2,6 +2,10 @@ import re
 
 from core.context import get_active_window_context
 from tools.windows import open_application
+from tools.projects import (
+    open_project_folder,
+    list_project_files
+)
 
 
 def normalize_command(command: str) -> str:
@@ -178,6 +182,75 @@ def handle_command(command: str):
 
     if context_response is not None:
         return context_response
+
+    # ----------------------------
+    # PROGETTO ATTUALE
+    # ----------------------------
+
+    if (
+        "apri la cartella del progetto" in command
+        or "apri cartella progetto" in command
+        or "apri la cartella di questo progetto" in command
+    ):
+
+        context = get_active_window_context()
+
+        if context is None:
+           return "Non riesco a rilevare il progetto attuale."
+
+        if not context.project_name:
+           return "Non riesco a capire su quale progetto stai lavorando."
+
+        success = open_project_folder(
+            context.project_name
+        )
+
+        if success:
+           return (
+               f"Apro la cartella del progetto "
+               f"{context.project_name}."
+           )
+
+        return (
+           f"Ho riconosciuto il progetto "
+           f"{context.project_name}, "
+           "ma non conosco ancora la sua posizione."
+        )
+
+    # ----------------------------
+    # FILE DEL PROGETTO
+    # ----------------------------
+
+    if (
+        "quali file ci sono nel progetto" in command
+        or "che file ci sono nel progetto" in command
+        or "mostrami i file del progetto" in command
+    ):
+
+        context = get_active_window_context()
+
+        if context is None or not context.project_name:
+            return "Non riesco a identificare il progetto."
+
+        files = list_project_files(
+            context.project_name
+        )
+
+        if not files:
+            return (
+                f"Non riesco a trovare i file del progetto "
+                f"{context.project_name}."
+            )
+
+        print(
+           "\n[PROJECT FILES]\n"
+           + "\n".join(files)
+        )
+
+        return (
+           f"Ho trovato {len(files)} file. "
+           "Li ho mostrati nel terminale."
+        )
 
     # ----------------------------
     # APERTURA APPLICAZIONI
