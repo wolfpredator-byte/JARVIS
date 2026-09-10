@@ -1,4 +1,5 @@
 from ollama import chat
+import json
 
 
 MODEL_NAME = "qwen2.5-coder:7b-instruct"
@@ -90,56 +91,54 @@ Regole:
             "modello di intelligenza artificiale locale."
         )
 
-def generate_code_patch(
+def generate_code_edits(
     code: str,
     file_name: str,
-    relative_file_path: str,
     project_name: str,
     diagnostics: str
-) -> str:
+) -> list[dict[str, str]] | None:
 
     system_prompt = """
 Sei il Coding Agent di JARVIS.
 
-Devi correggere SOLO il problema indicato.
+Devi proporre modifiche MINIME e precise al codice.
 
-REGOLE IMPORTANTISSIME:
-- NON restituire l'intero file.
-- NON riscrivere sezioni che non devono cambiare.
-- Restituisci ESCLUSIVAMENTE una unified diff patch.
-- La patch deve modificare il minor numero possibile di righe.
-- Mantieni tutto il resto del file invariato.
-- Non aggiungere spiegazioni.
-- Non usare ``` o blocchi Markdown.
-- Usa ESATTAMENTE il PERCORSO RELATIVO ESATTO fornito.
-- Non utilizzare solamente il nome del file.
-- Le intestazioni della patch devono essere:
+REGOLE:
+- Restituisci ESCLUSIVAMENTE JSON valido.
+- Non usare Markdown.
+- Non usare blocchi ```json.
+- Non restituire l'intero file.
+- Non generare unified diff.
+- Modifica soltanto il codice necessario.
+- old_text deve essere copiato ESATTAMENTE dal codice originale.
+- old_text deve contenere abbastanza contesto da comparire una sola volta.
+- new_text deve contenere il testo che sostituirà old_text.
+- Non modificare codice non collegato al problema.
+- Se servono più modifiche, crea più elementi in edits.
 
---- a/PERCORSO_RELATIVO
-+++ b/PERCORSO_RELATIVO
+Formato obbligatorio:
 
-Esempio:
---- a/tools/app_indexer.py
-+++ b/tools/app_indexer.py
-@@ ...
--riga vecchia
-+riga nuova
+{
+    "edits": [
+        {
+            "old_text": "testo esatto esistente",
+            "new_text": "nuovo testo"
+        }
+    ]
+}
 """
 
     user_prompt = f"""
 PROGETTO:
 {project_name}
 
-NOME FILE:
+FILE:
 {file_name}
 
-PERCORSO RELATIVO ESATTO:
-{relative_file_path}
-
-DIAGNOSTICA:
+DIAGNOSTICA REALE:
 {diagnostics}
 
-CONTENUTO ATTUALE:
+CODICE:
 {code}
 """
 
@@ -155,25 +154,72 @@ CONTENUTO ATTUALE:
                     "role": "user",
                     "content": user_prompt
                 }
-            ]
+            ],
+            options={
+                "temperature": 0
+            }
         )
 
         content = response.message.content
 
         if not content:
-            return ""
+            return None
 
-        patch = content.strip()
+        content = content.strip()
 
-        # Nel caso il modello ignori la richiesta
-        # e inserisca comunque markdown.
-        patch = patch.replace("```diff", "")
-        patch = patch.replace("```patch", "")
-        patch = patch.replace("```", "")
-        patch = patch.strip()
+        # Protezione nel caso il modello aggiunga comunque Markdown
+        content = content.replace("```json", "")
+        content = content.replace("```", "")
+        content = content.strip()
 
-        return patch
+        data = json.loads(content)
+
+        edits = data.get("edits")
+
+        if not isinstance(edits, list):
+            return None
+
+        cleaned_edits = []
+
+        for edit in edits:
+            if not isinstance(edit, dict):
+                continue
+
+            old_text = edit.get("old_text")
+            new_text = edit.get("new_text")
+
+            if not isinstance(old_text, str):
+                continue
+
+            if not isinstance(new_text, str):
+                continue
+
+            if not old_text:
+                continue
+
+            if old_text == new_text:
+                continue
+
+            cleaned_edits.append(
+                {
+                    "old_text": old_text,
+                    "new_text": new_text
+                }
+            )
+
+        if not cleaned_edits:
+            return None
+
+        return cleaned_edits
+
+    except json.JSONDecodeError as error:
+        print(
+            f"[AI EDIT JSON ERROR]: {error}"
+        )
+        return None
 
     except Exception as error:
-        print(f"[AI PATCH ERROR]: {error}")
-        return ""
+        print(
+            f"[AI EDIT ERROR]: {error}"
+        )
+        return None    

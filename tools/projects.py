@@ -129,11 +129,12 @@ def find_file_in_project(
         return None
 
     ignored_folders = {
-        ".git",
-        ".venv",
-        "__pycache__",
-        "node_modules",
-    }
+    ".git",
+    ".venv",
+    "__pycache__",
+    "node_modules",
+    "backups",
+}
 
     matches = []
 

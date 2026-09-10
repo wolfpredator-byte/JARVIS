@@ -110,3 +110,29 @@ def format_diagnostics(
         )
 
     return "\n".join(lines)
+
+def diagnostics_score(
+    diagnostics: list[dict]
+) -> int:
+
+    weights = {
+        "error": 100,
+        "warning": 10,
+        "information": 1,
+        "unknown": 1,
+    }
+
+    score = 0
+
+    for diagnostic in diagnostics:
+        severity = diagnostic.get(
+            "severity",
+            "unknown"
+        ).lower()
+
+        score += weights.get(
+            severity,
+            1
+        )
+
+    return score

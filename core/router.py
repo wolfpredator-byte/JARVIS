@@ -17,15 +17,18 @@ from tools.projects import (
 )
 from tools.diagnostics import (
     get_file_diagnostics,
-    format_diagnostics
+    format_diagnostics,
+    diagnostics_score
 )
 from core.ai import (
     analyze_code,
-    generate_code_patch,
+    generate_code_edits
 )
-from tools.code_patch import (
-    validate_patch,
-    apply_patch
+from tools.code_edit import (
+    prepare_edits,
+    create_backup,
+    apply_content_if_unchanged,
+    restore_content
 )
 from core.response import (
     JarvisResponse,
@@ -224,7 +227,7 @@ def handle_command(command: str):
     )
 
     # ----------------------------
-    # CONFERMA PATCH
+    # CONFERMA STRUCTURED EDIT
     # ----------------------------
 
     confirmation_phrases = [
@@ -237,7 +240,8 @@ def handle_command(command: str):
     ]
 
     if (
-        session.pending_patch is not None
+        session.pending_new_content
+        is not None
         and any(
             phrase == command
             or phrase in command
@@ -245,54 +249,87 @@ def handle_command(command: str):
         )
     ):
 
-        if not session.last_project or not session.last_file:
-            return "Ho perso il contesto della modifica."
-
-        # Ultimo controllo PRIMA della modifica
-        valid, error = validate_patch(
-            session.last_project,
-            session.pending_patch
-        )
-
-        if not valid:
-            session.pending_patch = None
-            session.pending_original_content = None
-
-            print(
-                f"[PATCH ERROR]: {error}"
-            )
+        if (
+            not session.last_project
+            or not session.last_file
+            or session.pending_original_content
+            is None
+        ):
+            session.clear_pending_edit()
 
             return (
-                "La patch non è più applicabile. "
-                "Non ho modificato il file."
+                "Ho perso il contesto "
+                "della modifica."
             )
 
-        success, error = apply_patch(
-            session.last_project,
-            session.pending_patch
-        )
-
-        if not success:
-            print(
-                f"[PATCH APPLY ERROR]: {error}"
-            )
-
-            return (
-                "Non sono riuscito ad applicare "
-                "la modifica."
-            )
-
-        # ----------------------------
-        # VERIFICA CON PYRIGHT
-        # ----------------------------
-
-        diagnostics = get_file_diagnostics(
+        # Backup PRIMA di toccare il file
+        backup_path = create_backup(
             session.last_project,
             session.last_file
         )
 
-        diagnostics_text = format_diagnostics(
-            diagnostics
+        if backup_path is None:
+            return (
+                "Non sono riuscito a creare "
+                "il backup. Per sicurezza "
+                "non ho modificato il file."
+            )
+
+        success, error = (
+            apply_content_if_unchanged(
+                project_name=(
+                    session.last_project
+                ),
+                file_name=(
+                    session.last_file
+                ),
+                expected_original=(
+                    session.pending_original_content
+                ),
+                new_content=(
+                    session.pending_new_content
+                )
+            )
+        )
+
+        if not success:
+            session.clear_pending_edit()
+
+            print(
+                f"[EDIT ERROR]: {error}"
+            )
+
+            return (
+                "Non ho applicato la modifica. "
+                + error
+            )
+
+        # ----------------------------
+        # VERIFICA POST-MODIFICA
+        # ----------------------------
+
+        after_diagnostics = (
+            get_file_diagnostics(
+                session.last_project,
+                session.last_file
+            )
+        )
+
+        after_score = diagnostics_score(
+            after_diagnostics
+        )
+
+        before_score = (
+            session.pending_before_score
+            if session.pending_before_score
+            is not None
+            else 0
+        )
+
+        diagnostics_text = (
+            format_diagnostics(
+                after_diagnostics
+            )
         )
 
         print(
@@ -300,35 +337,59 @@ def handle_command(command: str):
             + diagnostics_text
         )
 
-        session.last_diagnostics = diagnostics_text
+        # Se la situazione peggiora,
+        # rollback AUTOMATICO
+        if after_score > before_score:
 
-        # Conserviamo queste prima di svuotare
-        # la sessione
-        original_content = (
-            session.pending_original_content
+            restored = restore_content(
+                session.last_project,
+                session.last_file,
+                session.pending_original_content
+            )
+
+            session.clear_pending_edit()
+
+            if restored:
+                return (
+                    "La modifica peggiorava "
+                    "la diagnostica. "
+                    "L'ho annullata automaticamente."
+                )
+
+            return (
+                "La modifica ha peggiorato "
+                "la diagnostica e il rollback "
+                "automatico non è riuscito."
+            )
+
+        session.last_diagnostics = (
+            diagnostics_text
         )
 
-        session.pending_patch = None
-        session.pending_original_content = None
+        session.clear_pending_edit()
 
-        if not diagnostics:
+        if after_score == 0:
             return (
                 "Modifica applicata. "
                 "Pyright non rileva più problemi."
             )
 
-        # La patch non ha risolto tutto.
-        # Per ora NON rollbackiamo automaticamente,
-        # ma Jarvis lo segnala.
+        if after_score < before_score:
+            return (
+                "Modifica applicata. "
+                "La diagnostica è migliorata, "
+                "ma restano ancora alcuni problemi."
+            )
+
         return (
-            "Ho applicato la modifica, "
-            f"ma Pyright segnala ancora "
-            f"{len(diagnostics)} problemi. "
-            "La correzione deve essere ricontrollata."
+            "Modifica applicata. "
+            "La diagnostica non è peggiorata, "
+            "ma il problema deve essere "
+            "controllato ancora."
         )
 
     # ----------------------------
-    # PREPARA PATCH
+    # PREPARA STRUCTURED EDIT
     # ----------------------------
 
     if (
@@ -337,7 +398,10 @@ def handle_command(command: str):
         or "risolvi il problema" in command
     ):
 
-        if not session.last_project or not session.last_file:
+        if (
+            not session.last_project
+            or not session.last_file
+        ):
             return (
                 "Non ho un problema precedente "
                 "da correggere."
@@ -347,9 +411,34 @@ def handle_command(command: str):
             session.last_project,
             session.last_file
         )
- 
+
         if code is None:
-            return "Non riesco a leggere il file."
+            return (
+                "Non riesco a leggere il file."
+            )
+
+        # Diagnostica aggiornata
+        before_diagnostics = get_file_diagnostics(
+            session.last_project,
+            session.last_file
+        )
+
+        diagnostics_text = format_diagnostics(
+            before_diagnostics
+        )
+
+        edits = generate_code_edits(
+            code=code,
+            file_name=session.last_file,
+            project_name=session.last_project,
+            diagnostics=diagnostics_text
+        )
+
+        if not edits:
+            return (
+                "Non sono riuscito a generare "
+                "una modifica valida."
+            )
 
         file_path = find_file_in_project(
             session.last_project,
@@ -360,8 +449,14 @@ def handle_command(command: str):
             session.last_project
         )
 
-        if file_path is None or project_path is None:
-            return "Non riesco a determinare il percorso del file."
+        if (
+            file_path is None
+            or project_path is None
+        ):
+            return (
+                "Non riesco a determinare "
+                "il percorso del file."
+            )
 
         relative_file_path = (
             file_path
@@ -369,58 +464,56 @@ def handle_command(command: str):
             .as_posix()
         )
 
-        print(
-            f"[PATCH TARGET]: {relative_file_path}"
-        )
- 
-        patch = generate_code_patch(
-            code=code,
-            file_name=session.last_file,
-            relative_file_path=relative_file_path,
-            project_name=session.last_project,
-            diagnostics=(
-                session.last_diagnostics
-                or "Nessuna diagnostica disponibile."
-             )
-        )
-
-        if not patch:
-            return (
-                "Non sono riuscito a preparare "
-                "una correzione."
-            )
-
-        valid, error = validate_patch(
-            session.last_project,
-            patch,
-            expected_file=relative_file_path
+        (
+            valid,
+            error,
+            new_content,
+            diff
+        ) = prepare_edits(
+            original_content=code,
+            edits=edits,
+            relative_file_path=relative_file_path
         )
 
         if not valid:
             print(
-                "\n[PATCH NON VALIDA]\n"
-                + patch
-                + "\n\n[ERRORE]\n"
+                "\n[STRUCTURED EDIT RIFIUTATA]\n"
                 + error
             )
 
             return (
-                "Ho generato una correzione, "
-                "ma non supera il controllo di sicurezza. "
+                "Ho preparato una correzione, "
+                "ma non posso applicarla con sicurezza. "
                 "Non ho modificato nessun file."
             )
 
-        # Conserviamo il file originale
+        if (
+            new_content is None
+            or diff is None
+        ):
+            return (
+                "La correzione generata non è valida."
+            )
+
+        session.pending_edits = edits
         session.pending_original_content = code
-        session.pending_patch = patch
+        session.pending_new_content = (
+            new_content
+        )
+        session.pending_diff = diff
+        session.pending_before_score = (
+            diagnostics_score(
+                before_diagnostics
+            )
+        )
 
         print(
             "\n"
             + "=" * 60
-            + "\nPATCH PROPOSTA\n"
+            + "\nMODIFICA PROPOSTA\n"
             + "=" * 60
             + "\n"
-            + patch
+            + diff
             + "\n"
             + "=" * 60
         )
@@ -428,8 +521,8 @@ def handle_command(command: str):
         return (
             f"Ho preparato una modifica per "
             f"{session.last_file}. "
-            "La patch è valida e te l'ho mostrata "
-            "nel terminale. Vuoi che la applichi?"
+            "Te l'ho mostrata nel terminale. "
+            "Vuoi che la applichi?"
         )
 
     # ----------------------------
