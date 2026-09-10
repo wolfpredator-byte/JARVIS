@@ -1,6 +1,6 @@
 import time
 
-from core.router import handle_command
+from core.router import handle_command, is_shutdown_command
 
 from voice.listener import VoiceListener
 from voice.speaker import VoiceSpeaker
@@ -32,16 +32,7 @@ def main():
                 print("JARVIS: Nessun comando rilevato.")
                 continue
 
-            command_lower = command.lower().strip()
-
-            # Comandi per spegnere Jarvis
-            if command_lower in [
-                "esci",
-                "chiudi",
-                "spegniti",
-                "termina",
-                "sistema offline"
-            ]:
+            if is_shutdown_command(command):
                 speaker.speak("Sistema offline.")
                 break
 
