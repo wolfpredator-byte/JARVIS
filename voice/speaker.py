@@ -1,21 +1,21 @@
-import pyttsx3
 from typing import Any, cast
+
+import pyttsx3
 
 
 class VoiceSpeaker:
     def __init__(self):
-        self.engine = pyttsx3.init()
+        self.voice_id = self._find_italian_voice()
 
-        self.engine.setProperty("rate", 175)
-        self.engine.setProperty("volume", 1.0)
+    def _find_italian_voice(self):
+        engine = pyttsx3.init()
 
-        self._set_italian_voice()
-
-    def _set_italian_voice(self):
         voices = cast(
             list[Any],
-            self.engine.getProperty("voices")
+            engine.getProperty("voices")
         )
+
+        selected_voice = None
 
         for voice in voices:
             name = str(getattr(voice, "name", "")).lower()
@@ -37,14 +37,13 @@ class VoiceSpeaker:
                 or "italiano" in name
                 or "it-it" in languages
             ):
-                self.engine.setProperty("voice", voice.id)
+                selected_voice = voice.id
                 print(f"Voce italiana selezionata: {voice.name}")
-                return
+                break
 
-        print(
-            "ATTENZIONE: nessuna voce italiana trovata. "
-            "Uso la voce predefinita."
-        )
+        engine.stop()
+
+        return selected_voice
 
     def speak(self, text: str):
         if not text:
@@ -52,5 +51,20 @@ class VoiceSpeaker:
 
         print(f"JARVIS: {text}")
 
-        self.engine.say(text)
-        self.engine.runAndWait()
+        try:
+            # Ricreiamo il motore per evitare problemi
+            # dopo l'utilizzo del microfono
+            engine = pyttsx3.init()
+
+            engine.setProperty("rate", 175)
+            engine.setProperty("volume", 1.0)
+
+            if self.voice_id:
+                engine.setProperty("voice", self.voice_id)
+
+            engine.say(text)
+            engine.runAndWait()
+            engine.stop()
+
+        except Exception as error:
+            print(f"[TTS ERROR]: {error}")

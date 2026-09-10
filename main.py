@@ -1,3 +1,5 @@
+import time
+
 from core.router import handle_command
 
 from voice.listener import VoiceListener
@@ -17,12 +19,12 @@ def main():
 
     while True:
         try:
-            # Rimane in attesa finché non sente la wake word
+            # Aspetta la wake word
             wakeword.wait_for_wake_word()
 
             print("JARVIS: Ti ascolto.")
 
-            # Ora ascolta il comando vero
+            # Ascolta il comando
             command = listener.listen()
 
             if not command:
@@ -31,6 +33,7 @@ def main():
 
             command_lower = command.lower().strip()
 
+            # Comandi per spegnere Jarvis
             if command_lower in [
                 "esci",
                 "chiudi",
@@ -41,8 +44,16 @@ def main():
                 speaker.speak("Sistema offline.")
                 break
 
+            # Invia il comando al router
             response = handle_command(command)
 
+            print(f"[DEBUG RESPONSE]: {repr(response)}")
+
+            # Lascia al microfono il tempo di rilasciare
+            # il dispositivo audio
+            time.sleep(0.3)
+
+            # Risposta vocale
             speaker.speak(response)
 
         except KeyboardInterrupt:
