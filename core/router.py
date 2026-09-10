@@ -4,7 +4,8 @@ from core.context import get_active_window_context
 from tools.windows import open_application
 from tools.projects import (
     open_project_folder,
-    list_project_files
+    list_project_files,
+    read_project_file
 )
 
 
@@ -251,6 +252,64 @@ def handle_command(command: str):
            f"Ho trovato {len(files)} file. "
            "Li ho mostrati nel terminale."
         )
+
+    # ----------------------------
+    # LEGGI FILE ATTUALE
+    # ----------------------------
+
+    read_file_phrases = [
+        "leggi il file aperto",
+        "leggi il file che ho aperto",
+        "leggi questo file",
+        "mostrami il file aperto",
+        "mostrami il contenuto del file",
+        "mostrami il contenuto di questo file",
+    ]
+
+    if any(
+        phrase in command
+        for phrase in read_file_phrases
+    ):
+        context = get_active_window_context()
+   
+        if context is None:
+           return "Non riesco a rilevare il contesto attuale."
+
+        if not context.project_name:
+           return "Non riesco a identificare il progetto."
+
+        if not context.current_file:
+           return "Non riesco a identificare il file aperto."
+
+        content = read_project_file(
+           context.project_name,
+           context.current_file
+        )
+  
+        if content is None:
+           return (
+               f"Ho riconosciuto {context.current_file}, "
+               "ma non riesco a leggerlo."
+           )
+
+        print(
+            "\n"
+            + "=" * 60
+            + f"\nFILE: {context.current_file}\n"
+            + "=" * 60
+            + "\n"
+            + content
+            + "\n"
+            + "=" * 60
+        )
+
+        line_count = len(content.splitlines())
+
+        return (
+            f"Ho letto {context.current_file}. "
+            f"Contiene {line_count} righe. "
+            "Ho mostrato il contenuto nel terminale."
+       )
 
     # ----------------------------
     # APERTURA APPLICAZIONI

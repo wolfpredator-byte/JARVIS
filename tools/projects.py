@@ -117,3 +117,87 @@ def list_project_files(
             break
 
     return files
+
+def find_file_in_project(
+    project_name: str,
+    file_name: str
+) -> Path | None:
+
+    project_path = find_project_path(project_name)
+
+    if project_path is None:
+        return None
+
+    ignored_folders = {
+        ".git",
+        ".venv",
+        "__pycache__",
+        "node_modules",
+    }
+
+    matches = []
+
+    for item in project_path.rglob(file_name):
+
+        if any(
+            ignored in item.parts
+            for ignored in ignored_folders
+        ):
+            continue
+
+        if item.is_file():
+            matches.append(item)
+
+    if not matches:
+        return None
+
+    # Per ora, se ce n'è uno solo,
+    # sappiamo esattamente quale usare
+    if len(matches) == 1:
+        return matches[0]
+
+    # Se esistono più file con lo stesso nome,
+    # evitiamo di scegliere a caso
+    print(
+        f"[PROJECT WARNING] "
+        f"Trovati più file chiamati {file_name}:"
+    )
+
+    for match in matches:
+        print(f" - {match}")
+
+    return None
+
+
+def read_project_file(
+    project_name: str,
+    file_name: str
+) -> str | None:
+
+    file_path = find_file_in_project(
+        project_name,
+        file_name
+    )
+
+    if file_path is None:
+        return None
+
+    try:
+        return file_path.read_text(
+            encoding="utf-8"
+        )
+
+    except UnicodeDecodeError:
+        print(
+            f"[PROJECT ERROR] "
+            f"{file_path.name} non sembra essere "
+            f"un file di testo."
+        )
+        return None
+
+    except OSError as error:
+        print(
+            f"[PROJECT ERROR] "
+            f"Impossibile leggere il file: {error}"
+        )
+        return None
