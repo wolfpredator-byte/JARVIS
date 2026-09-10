@@ -201,3 +201,32 @@ def read_project_file(
             f"Impossibile leggere il file: {error}"
         )
         return None
+
+def write_project_file(
+    project_name: str,
+    file_name: str,
+    content: str
+) -> bool:
+
+    file_path = find_file_in_project(
+        project_name,
+        file_name
+    )
+
+    if file_path is None:
+        return False
+
+    try:
+        file_path.write_text(
+            content,
+            encoding="utf-8"
+        )
+
+        return True
+
+    except OSError as error:
+        print(
+            f"[WRITE ERROR]: {error}"
+        )
+
+        return False

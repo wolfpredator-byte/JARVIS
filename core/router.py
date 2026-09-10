@@ -1,12 +1,23 @@
 import re
+import unicodedata
 
 from core.context import get_active_window_context
-from core.ai import analyze_code
+from core.session import session
+from difflib import SequenceMatcher
 from tools.windows import open_application
 from tools.projects import (
     open_project_folder,
     list_project_files,
-    read_project_file
+    read_project_file,
+    write_project_file
+)
+from tools.diagnostics import (
+    get_file_diagnostics,
+    format_diagnostics
+)
+from core.ai import (
+    analyze_code,
+    generate_code_fix
 )
 
 
@@ -32,7 +43,33 @@ def normalize_command(command: str) -> str:
         command
     )
 
+    command = "".join(
+        char
+        for char in unicodedata.normalize("NFD", command)
+        if unicodedata.category(char) != "Mn"
+    )
+
+    command = "".join(
+    char
+    for char in unicodedata.normalize("NFD", command)
+    if unicodedata.category(char) != "Mn"
+    )
+
     return command
+
+def similar_to(
+    command: str,
+    target: str,
+    threshold: float = 0.78
+) -> bool:
+
+    score = SequenceMatcher(
+        None,
+        command,
+        target
+    ).ratio()
+
+    return score >= threshold
 
 def is_shutdown_command(command: str) -> bool:
     command = normalize_command(command)
@@ -175,6 +212,116 @@ def handle_command(command: str):
     )
 
     # ----------------------------
+    # CONFERMA FIX
+    # ----------------------------
+
+    confirmation_phrases = [
+        "si",
+        "vai",
+        "procedi",
+        "applicalo",
+        "applica la modifica",
+        "fallo",
+    ]
+
+    if (
+        session.pending_fix is not None
+        and any(
+            phrase == command
+            or phrase in command
+            for phrase in confirmation_phrases
+        )
+    ):
+        if not session.last_project or not session.last_file:
+            return "Ho perso il contesto della modifica."
+
+        success = write_project_file(
+            session.last_project,
+            session.last_file,
+            session.pending_fix
+        )
+
+        if not success:
+            return "Non sono riuscito a modificare il file."
+
+        session.pending_fix = None
+
+        diagnostics = get_file_diagnostics(
+            session.last_project,
+            session.last_file
+        )
+
+        diagnostics_text = format_diagnostics(
+            diagnostics
+        )
+
+        print(
+            "\n[POST-FIX PYRIGHT]\n"
+            + diagnostics_text
+        )
+
+        session.last_diagnostics = diagnostics_text
+
+        if not diagnostics:
+            return (
+                "Correzione applicata. "
+                "Pyright non rileva più problemi nel file."
+            )
+
+        return (
+            "Ho applicato la correzione, "
+            f"ma Pyright segnala ancora "
+            f"{len(diagnostics)} problemi."
+        )
+
+    # ----------------------------
+    # PREPARA FIX
+    # ---------------------------- 
+
+    if (
+        similar_to(command, "sistemalo")
+        or "correggilo" in command
+        or "risolvi il problema" in command
+    ):
+        if not session.last_project or not session.last_file:
+            return (
+                "Non ho un problema precedente "
+                "da correggere."
+            )
+
+        code = read_project_file(
+            session.last_project,
+            session.last_file
+        )
+
+        if code is None:
+            return "Non riesco a leggere il file."
+
+        fix = generate_code_fix(
+            code=code,
+            file_name=session.last_file,
+            project_name=session.last_project,
+            diagnostics=(
+                session.last_diagnostics
+                or "Nessuna diagnostica disponibile."
+            )
+        )
+
+        if not fix:
+            return (
+                "Non sono riuscito a preparare "
+                "la correzione."
+            )
+
+        session.pending_fix = fix
+
+        return (
+            f"Ho preparato una correzione per "
+            f"{session.last_file}. "
+            "Vuoi che la applichi?"
+        )
+
+    # ----------------------------
     # CONTEXT AWARENESS
     # ----------------------------
 
@@ -312,6 +459,7 @@ def handle_command(command: str):
             "Ho mostrato il contenuto nel terminale."
        )
 
+
     # ----------------------------
     # CODING ASSISTANT
     # ----------------------------
@@ -360,12 +508,34 @@ def handle_command(command: str):
             f"{context.current_file}..."
         )
 
+        diagnostics = get_file_diagnostics(
+            context.project_name,
+            context.current_file
+        )
+
+        diagnostics_text = format_diagnostics(
+            diagnostics
+        )
+
+        print(
+            "\n[PYRIGHT DIAGNOSTICS]\n"
+            + diagnostics_text
+        )
+
         response = analyze_code(
             code=content,
             file_name=context.current_file,
             project_name=context.project_name,
-            request=command
+            request=command,
+            diagnostics=diagnostics_text
         )
+
+        session.last_project = context.project_name
+        session.last_file = context.current_file
+        session.last_request = command
+        session.last_diagnostics = diagnostics_text
+        session.last_ai_response = response
+        
 
         print(
             "\n"

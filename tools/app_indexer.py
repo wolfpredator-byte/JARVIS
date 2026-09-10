@@ -492,9 +492,7 @@ def _version_key(
         )
     ]
 
-    numbers = (
-        numbers + [0, 0, 0, 0]
-    )[:4]
+    numbers = numbers[:4] + [0] * (4 - len(numbers))
 
     return tuple(numbers)
 
