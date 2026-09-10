@@ -37,12 +37,29 @@ class VoiceListener:
 
         print("Modello vocale pronto.")
 
-    def listen(self) -> str:
+    def listen(
+    self,
+    initial_audio: np.ndarray | None = None
+) -> str:
         print("\n🎙️ JARVIS sta ascoltando...")
 
         audio_chunks = []
 
         speech_started = False
+        if initial_audio is not None and initial_audio.size > 0:
+            audio_chunks.append(initial_audio)
+
+            rms = float(
+                np.sqrt(
+                    np.mean(
+                       np.square(initial_audio)
+                    )
+                )
+            )
+
+            if rms > SILENCE_THRESHOLD:
+                   speech_started = True
+                   print("🗣️ Voce rilevata.")
         silence_time = 0.0
 
         start_time = time.monotonic()

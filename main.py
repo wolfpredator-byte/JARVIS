@@ -19,13 +19,14 @@ def main():
 
     while True:
         try:
-            # Aspetta la wake word
-            wakeword.wait_for_wake_word()
+
+            initial_audio = wakeword.wait_for_wake_word()
 
             print("JARVIS: Ti ascolto.")
 
-            # Ascolta il comando
-            command = listener.listen()
+            command = listener.listen(
+                initial_audio=initial_audio
+            )
 
             if not command:
                 print("JARVIS: Nessun comando rilevato.")

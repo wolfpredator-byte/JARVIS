@@ -1,12 +1,20 @@
+from typing import cast
+
 import numpy as np
 import sounddevice as sd
 
 from openwakeword.model import Model
-from typing import cast
 
 
 SAMPLE_RATE = 16000
 CHUNK_SIZE = 1280
+
+# Audio che continuiamo a registrare immediatamente
+# dopo aver riconosciuto "Hey Jarvis"
+POST_WAKE_SECONDS = 0.4
+POST_WAKE_CHUNKS = int(
+    POST_WAKE_SECONDS / (CHUNK_SIZE / SAMPLE_RATE)
+)
 
 
 class WakeWordListener:
@@ -22,7 +30,7 @@ class WakeWordListener:
 
         print("Wake word pronta.")
 
-    def wait_for_wake_word(self):
+    def wait_for_wake_word(self) -> np.ndarray:
         print("\n👂 In attesa di: Hey Jarvis...")
 
         with sd.InputStream(
@@ -53,4 +61,30 @@ class WakeWordListener:
                         )
 
                         self.model.reset()
-                        return
+
+                        # Continua subito a registrare ciò che
+                        # viene detto dopo "Hey Jarvis"
+                        post_wake_audio = []
+
+                        for _ in range(POST_WAKE_CHUNKS):
+                            chunk, _ = stream.read(CHUNK_SIZE)
+                            post_wake_audio.append(
+                                np.squeeze(chunk)
+                            )
+
+                        if post_wake_audio:
+                            audio_data = np.concatenate(
+                                post_wake_audio
+                            )
+
+                            # Converte int16 -> float32,
+                            # formato usato dal listener
+                            return (
+                                audio_data.astype(np.float32)
+                                / 32768.0
+                            )
+
+                        return np.array(
+                            [],
+                            dtype=np.float32
+                        )
