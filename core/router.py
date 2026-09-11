@@ -1,6 +1,7 @@
 import re
 import unicodedata
 
+from core.code_agent import find_verified_fix
 from core.context import get_active_window_context
 from core.session import session
 from difflib import SequenceMatcher
@@ -21,11 +22,8 @@ from tools.diagnostics import (
     format_diagnostics,
     diagnostics_score
 )
-from core.ai import (
-    analyze_code,
-    generate_code_edits,
-    analyze_failed_fix
-)
+from core.ai import analyze_code
+
 from tools.code_edit import (
     prepare_edits,
     create_backup,
@@ -392,8 +390,9 @@ def handle_command(command: str):
             "controllato ancora."
         )
 
-    # ----------------------------
-    # PREPARA STRUCTURED EDIT
+        # ----------------------------
+    # CODING AGENT V0.2
+    # AUTO RETRY + MODEL ESCALATION
     # ----------------------------
 
     retry_requested = (
@@ -404,17 +403,6 @@ def handle_command(command: str):
         or "prova un'altra soluzione" in command
     )
 
-    if retry_requested:
-        session.fix_retry_count += 1
-
-        if session.fix_retry_count > session.max_fix_retries:
-            return (
-                "Ho già tentato diverse correzioni senza ottenere "
-                "un risultato affidabile. Non voglio continuare "
-                "a modificare il file alla cieca. "
-                "Serve un'analisi più approfondita."
-            )
-
     fix_requested = (
         similar_to(command, "sistemalo")
         or "correggilo" in command
@@ -422,18 +410,6 @@ def handle_command(command: str):
     )
 
     if retry_requested or fix_requested:
-
-        if retry_requested:
-            if not session.last_failed_edits:
-                return (
-                    "Non ho un tentativo precedente "
-                    "fallito da cui ripartire."
-                )
-
-            print(
-                "[CODING AGENT] "
-                "Nuovo tentativo basato sul fix precedente."
-            )
 
         if (
             not session.last_project
@@ -454,291 +430,134 @@ def handle_command(command: str):
                 "Non riesco a leggere il file."
             )
 
-        # Diagnostica aggiornata
-        before_diagnostics = get_file_diagnostics(
-            session.last_project,
-            session.last_file
+        before_diagnostics = (
+            get_file_diagnostics(
+                session.last_project,
+                session.last_file
+            )
         )
 
-        diagnostics_text = format_diagnostics(
-            before_diagnostics
+        diagnostics_text = (
+            format_diagnostics(
+                before_diagnostics
+            )
         )
 
-        # ----------------------------
-        # ESCALATION DOPO PIÙ FALLIMENTI
-        # ----------------------------
+        print(
+            "\n"
+            + "=" * 60
+            + "\nCODING AGENT V0.2\n"
+            + "=" * 60
+        )
 
-        if (
-            retry_requested
-            and session.fix_retry_count >= session.max_fix_retries
-        ):
-            analysis = analyze_failed_fix(
-                code=code,
-                file_name=session.last_file,
-                project_name=session.last_project,
-                diagnostics=diagnostics_text,
-                failed_edits=session.last_failed_edits,
-                failed_diagnostics=session.last_failed_diagnostics
-            )
-
-            print(
-                "\n"
-                + "=" * 60
-                + "\nANALISI FALLIMENTO\n"
-                + "=" * 60
-                + "\n"
-                + analysis
-                + "\n"
-                + "=" * 60
-            )
-
-            return JarvisResponse(
-                display=analysis,
-                speech=(
-                    "I tentativi automatici non stanno risolvendo "
-                    "il problema. Ho analizzato perché stanno "
-                    "fallendo e ti ho mostrato i dettagli nel terminale."
-                )
-            )
-
-        edits = generate_code_edits(
+        result = find_verified_fix(
+            project_name=(
+                session.last_project
+            ),
+            file_name=(
+                session.last_file
+            ),
             code=code,
-            file_name=session.last_file,
-            project_name=session.last_project,
-            diagnostics=diagnostics_text,
+            before_diagnostics=(
+                before_diagnostics
+            ),
+            diagnostics_text=(
+                diagnostics_text
+            ),
+            analysis_context=(
+                session.last_ai_response
+            ),
             previous_failed_edits=(
                 session.last_failed_edits
                 if retry_requested
                 else None
             ),
-            failed_diagnostics=(
+            previous_failed_diagnostics=(
                 session.last_failed_diagnostics
                 if retry_requested
                 else None
             )
         )
 
-        if not edits:
+        # ----------------------------
+        # NESSUNA SOLUZIONE
+        # ----------------------------
 
-            if retry_requested:
-                analysis = analyze_failed_fix(
-                    code=code,
-                    file_name=session.last_file,
-                    project_name=session.last_project,
-                    diagnostics=diagnostics_text,
-                    failed_edits=session.last_failed_edits,
-                    failed_diagnostics=session.last_failed_diagnostics
+        if not result.success:
+
+            session.last_failed_edits = (
+                result.last_failed_edits
+            )
+
+            session.last_failed_diagnostics = (
+                result.last_failed_diagnostics
+            )
+
+            return JarvisResponse(
+                display=result.report,
+                speech=(
+                    "Ho testato automaticamente "
+                    "diverse correzioni e ho anche "
+                    "aumentato progressivamente "
+                    "il modello utilizzato, ma non "
+                    "ho trovato una soluzione "
+                    "verificata."
                 )
-
-                print(
-                    "\n"
-                    + "=" * 60
-                    + "\nANALISI DOPO RETRY FALLITO\n"
-                    + "=" * 60
-                    + "\n"
-                    + analysis
-                    + "\n"
-                    + "=" * 60
-                )
-
-                return JarvisResponse(
-                    display=analysis,
-                    speech=(
-                        "Non sono riuscito a generare una nuova "
-                        "correzione affidabile. Ho interrotto i tentativi "
-                        "e ho analizzato il problema più a fondo."
-                    )
-                )
-
-            return (
-                "Non sono riuscito a generare "
-                "una modifica valida."
-            )
-
-        file_path = find_file_in_project(
-            session.last_project,
-            session.last_file
-        )
-
-        project_path = find_project_path(
-            session.last_project
-        )
-
-        if (
-            file_path is None
-            or project_path is None
-        ):
-            return (
-                "Non riesco a determinare "
-                "il percorso del file."
-            )
-
-        relative_file_path = (
-            file_path
-            .relative_to(project_path)
-            .as_posix()
-        )
-
-        (
-            valid,
-            error,
-            new_content,
-            diff
-        ) = prepare_edits(
-            original_content=code,
-            edits=edits,
-            relative_file_path=relative_file_path
-        )
-
-        if not valid:
-            print(
-                "\n[STRUCTURED EDIT RIFIUTATA]\n"
-                + error
-            )
-
-            return (
-                "Ho preparato una correzione, "
-                "ma non posso applicarla con sicurezza. "
-                "Non ho modificato nessun file."
-            )
-
-        if (
-            new_content is None
-            or diff is None
-        ):
-            return (
-                "La correzione generata non è valida."
             )
 
         # ----------------------------
-        # PREFLIGHT VALIDATION
+        # SOLUZIONE VERIFICATA
         # ----------------------------
 
-        before_score = diagnostics_score(
-            before_diagnostics
-        )
-
-        (
-            preflight_diagnostics,
-            preflight_error
-        ) = get_preflight_diagnostics(
-            project_name=session.last_project,
-            file_name=session.last_file,
-            new_content=new_content
-        )
-
-        if preflight_diagnostics is None:
-            print(
-                "\n[PREFLIGHT ERROR]\n"
-                + preflight_error
-            )
-
+        if (
+            result.edits is None
+            or result.new_content is None
+            or result.diff is None
+        ):
             return (
-                "Ho preparato una correzione, "
-                "ma non sono riuscito a verificarla "
-                "in sicurezza. Non ho modificato "
-                "nessun file."
+                "Ho trovato una possibile "
+                "correzione, ma il risultato "
+                "interno non è valido."
             )
 
-        preflight_text = format_diagnostics(
-            preflight_diagnostics
+        session.pending_edits = (
+            result.edits
         )
 
-        preflight_score = diagnostics_score(
-            preflight_diagnostics
+        session.pending_original_content = (
+            code
         )
 
-        print(
-            "[PREFLIGHT DEBUG] "
-            f"diagnostiche prima="
-            f"{len(before_diagnostics)}, "
-            f"diagnostiche candidato="
-            f"{len(preflight_diagnostics)}, "
-            f"score prima={before_score}, "
-            f"score candidato={preflight_score}"
+        session.pending_new_content = (
+            result.new_content
         )
+
+        session.pending_diff = (
+            result.diff
+        )
+
+        session.pending_before_score = (
+            result.before_score
+        )
+
+        session.last_failed_edits = None
+        session.last_failed_diagnostics = None
 
         print(
             "\n"
             + "=" * 60
-            + "\nPREFLIGHT PYRIGHT\n"
+            + "\nCORREZIONE VERIFICATA\n"
             + "=" * 60
             + "\n"
-            + f"Score prima: {before_score}\n"
-            + f"Score candidato: {preflight_score}\n\n"
-            + preflight_text
-            + "\n"
+            + f"Modello: "
+            + f"{result.model_name}\n"
+            + f"Candidato: "
+            + f"{result.attempt_number}\n"
+            + f"Pyright: "
+            + f"{result.before_score} "
+            + "→ "
+            + f"{result.after_score}\n"
             + "=" * 60
-        )
-
-        # ----------------------------
-        # CANDIDATO PEGGIORE
-        # ----------------------------
-
-        if preflight_score > before_score:
-
-            session.last_failed_edits = edits
-            session.last_failed_diagnostics = (
-                preflight_text
-            )
-
-            print(
-                "\n[PREFLIGHT] "
-                "Correzione scartata: "
-                "la diagnostica peggiora."
-            )
-
-            return (
-                "Ho testato la correzione prima "
-                "di applicarla. Peggiorava la "
-                "diagnostica, quindi l'ho scartata. "
-                "Il file originale non è stato modificato."
-            )
-
-        # ----------------------------
-        # CANDIDATO NON MIGLIORE
-        # ----------------------------
-
-        if preflight_score == before_score:
-
-            session.last_failed_edits = edits
-            session.last_failed_diagnostics = (
-                preflight_text
-            )
-
-            print(
-                "\n[PREFLIGHT] "
-                "Correzione scartata: "
-                "non migliora la diagnostica."
-            )
-
-            return (
-                "Ho testato la correzione, "
-                "ma non migliora la diagnostica. "
-                "L'ho scartata senza modificare "
-                "il file originale."
-            )
-
-        # ----------------------------
-        # CANDIDATO MIGLIORE
-        # ----------------------------
-
-        print(
-            "\n[PREFLIGHT] "
-            "Correzione verificata: "
-            "la diagnostica migliora."
-        )     
-
-        session.pending_edits = edits
-        session.pending_original_content = code
-        session.pending_new_content = (
-            new_content
-        )
-        session.pending_diff = diff
-        session.pending_before_score = (
-            diagnostics_score(
-                before_diagnostics
-            )
         )
 
         print(
@@ -747,15 +566,16 @@ def handle_command(command: str):
             + "\nMODIFICA PROPOSTA\n"
             + "=" * 60
             + "\n"
-            + diff
+            + result.diff
             + "\n"
             + "=" * 60
         )
 
         return (
-            f"Ho preparato una modifica per "
-            f"{session.last_file}. "
-            "Te l'ho mostrata nel terminale. "
+            f"Ho trovato una correzione "
+            f"verificata usando "
+            f"{result.model_name}. "
+            "La diagnostica migliora. "
             "Vuoi che la applichi?"
         )
 

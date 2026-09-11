@@ -4,6 +4,30 @@ import json
 
 MODEL_NAME = "qwen2.5-coder:7b-instruct"
 
+
+CODING_MODEL_PLAN = [
+    {
+        "model": "qwen2.5-coder:7b-instruct",
+        "attempts": 3,
+    },
+    {
+        "model": "qwen2.5-coder:14b",
+        "attempts": 3,
+    },
+    {
+        "model": "qwen3.8:27b-q4_k_m",
+        "attempts": 2,
+    },
+    {
+        "model": "qwen3.8:27b",
+        "attempts": 2,
+    },
+    {
+        "model": "qwen3.6:35b",
+        "attempts": 1,
+    },
+]
+
 # Evitiamo di passare file enormi al modello
 MAX_CODE_CHARS = 30000
 
@@ -97,9 +121,11 @@ def generate_code_edits(
     project_name: str,
     diagnostics: str,
     previous_failed_edits: list[dict[str, str]] | None = None,
-    failed_diagnostics: str | None = None
+    failed_diagnostics: str | None = None,
+    model_name: str = MODEL_NAME,
+    attempt_number: int = 1,
+    attempt_feedback: str | None = None
 ) -> list[dict[str, str]] | None:
-
     system_prompt = """
 Sei il Coding Agent di JARVIS.
 
@@ -121,6 +147,18 @@ REGOLE:
 - Non riproporre la stessa modifica.
 - La nuova soluzione deve essere materialmente differente.
 - Usa la diagnostica del tentativo fallito per capire cosa è andato storto.
+- La diagnostica fornita da Pyright è la fonte principale da seguire.
+- Prima di creare la modifica, identifica quale espressione produce
+  realmente il tipo o il valore sbagliato.
+- Non modificare una firma, un tipo di ritorno o un contratto pubblico
+  soltanto per far sparire l'errore del type checker.
+- Una modifica deve affrontare la CAUSA della diagnostica.
+- Verifica mentalmente che la modifica non contraddica il messaggio
+  di errore.
+- Se i tentativi precedenti sono falliti, NON ripetere quelle modifiche.
+- Cerca una strategia materialmente differente.
+- old_text deve esistere esattamente nel codice ricevuto.
+- new_text deve essere realmente diverso da old_text.
 
 Formato obbligatorio:
 
@@ -157,6 +195,21 @@ Analizza perché ha peggiorato la diagnostica e proponi
 una soluzione differente.
 """
 
+    automatic_retry_section = ""
+
+    if attempt_feedback:
+        automatic_retry_section = f"""
+RISULTATI DEI TENTATIVI AUTOMATICI PRECEDENTI:
+
+{attempt_feedback}
+
+Questi tentativi sono già stati verificati realmente con Pyright
+e NON hanno risolto il problema.
+
+Non ripetere quelle strategie.
+Proponi una modifica diversa.
+"""
+
     user_prompt = f"""
 PROGETTO:
 {project_name}
@@ -170,12 +223,16 @@ DIAGNOSTICA REALE:
 CODICE:
 {code}
 
+TENTATIVO AUTOMATICO:
+{attempt_number}
+{automatic_retry_section}
 {failed_attempt_section}
+
 """
 
     try:
         response = chat(
-            model=MODEL_NAME,
+            model=model_name,
             messages=[
                 {
                     "role": "system",
@@ -187,7 +244,7 @@ CODICE:
                 }
             ],
             options={
-                "temperature": 0
+                "temperature": 0.1
             }
         )
 
@@ -197,7 +254,7 @@ CODICE:
             return None
 
         print(
-            "\n[AI RAW EDIT RESPONSE]\n"
+            f"\n[AI RAW EDIT RESPONSE - {model_name}]\n"
             + content
         )
 

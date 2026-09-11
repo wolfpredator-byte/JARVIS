@@ -494,7 +494,7 @@ def _version_key(
 
     numbers = numbers[:4] + [0] * (4 - len(numbers))
 
-    return (numbers[0], numbers[1], numbers[2], numbers[3])
+    return tuple(numbers)
 
 
 def find_application(
