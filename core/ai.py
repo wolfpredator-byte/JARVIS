@@ -16,11 +16,11 @@ CODING_MODEL_PLAN = [
     },
     {
         "model": "qwen3.8:27b-q4_k_m",
-        "attempts": 2,
+        "attempts": 1,
     },
     {
         "model": "qwen3.8:27b",
-        "attempts": 2,
+        "attempts": 1,
     },
     {
         "model": "qwen3.6:35b",
