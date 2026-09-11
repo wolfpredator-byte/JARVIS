@@ -17,6 +17,7 @@ from tools.projects import (
 )
 from tools.diagnostics import (
     get_file_diagnostics,
+    get_preflight_diagnostics,
     format_diagnostics,
     diagnostics_score
 )
@@ -608,6 +609,125 @@ def handle_command(command: str):
             return (
                 "La correzione generata non è valida."
             )
+
+        # ----------------------------
+        # PREFLIGHT VALIDATION
+        # ----------------------------
+
+        before_score = diagnostics_score(
+            before_diagnostics
+        )
+
+        (
+            preflight_diagnostics,
+            preflight_error
+        ) = get_preflight_diagnostics(
+            project_name=session.last_project,
+            file_name=session.last_file,
+            new_content=new_content
+        )
+
+        if preflight_diagnostics is None:
+            print(
+                "\n[PREFLIGHT ERROR]\n"
+                + preflight_error
+            )
+
+            return (
+                "Ho preparato una correzione, "
+                "ma non sono riuscito a verificarla "
+                "in sicurezza. Non ho modificato "
+                "nessun file."
+            )
+
+        preflight_text = format_diagnostics(
+            preflight_diagnostics
+        )
+
+        preflight_score = diagnostics_score(
+            preflight_diagnostics
+        )
+
+        print(
+            "[PREFLIGHT DEBUG] "
+            f"diagnostiche prima="
+            f"{len(before_diagnostics)}, "
+            f"diagnostiche candidato="
+            f"{len(preflight_diagnostics)}, "
+            f"score prima={before_score}, "
+            f"score candidato={preflight_score}"
+        )
+
+        print(
+            "\n"
+            + "=" * 60
+            + "\nPREFLIGHT PYRIGHT\n"
+            + "=" * 60
+            + "\n"
+            + f"Score prima: {before_score}\n"
+            + f"Score candidato: {preflight_score}\n\n"
+            + preflight_text
+            + "\n"
+            + "=" * 60
+        )
+
+        # ----------------------------
+        # CANDIDATO PEGGIORE
+        # ----------------------------
+
+        if preflight_score > before_score:
+
+            session.last_failed_edits = edits
+            session.last_failed_diagnostics = (
+                preflight_text
+            )
+
+            print(
+                "\n[PREFLIGHT] "
+                "Correzione scartata: "
+                "la diagnostica peggiora."
+            )
+
+            return (
+                "Ho testato la correzione prima "
+                "di applicarla. Peggiorava la "
+                "diagnostica, quindi l'ho scartata. "
+                "Il file originale non è stato modificato."
+            )
+
+        # ----------------------------
+        # CANDIDATO NON MIGLIORE
+        # ----------------------------
+
+        if preflight_score == before_score:
+
+            session.last_failed_edits = edits
+            session.last_failed_diagnostics = (
+                preflight_text
+            )
+
+            print(
+                "\n[PREFLIGHT] "
+                "Correzione scartata: "
+                "non migliora la diagnostica."
+            )
+
+            return (
+                "Ho testato la correzione, "
+                "ma non migliora la diagnostica. "
+                "L'ho scartata senza modificare "
+                "il file originale."
+            )
+
+        # ----------------------------
+        # CANDIDATO MIGLIORE
+        # ----------------------------
+
+        print(
+            "\n[PREFLIGHT] "
+            "Correzione verificata: "
+            "la diagnostica migliora."
+        )     
 
         session.pending_edits = edits
         session.pending_original_content = code
