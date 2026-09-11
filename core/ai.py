@@ -95,7 +95,9 @@ def generate_code_edits(
     code: str,
     file_name: str,
     project_name: str,
-    diagnostics: str
+    diagnostics: str,
+    previous_failed_edits: list[dict[str, str]] | None = None,
+    failed_diagnostics: str | None = None
 ) -> list[dict[str, str]] | None:
 
     system_prompt = """
@@ -115,6 +117,10 @@ REGOLE:
 - new_text deve contenere il testo che sostituirà old_text.
 - Non modificare codice non collegato al problema.
 - Se servono più modifiche, crea più elementi in edits.
+- Se viene fornito un tentativo precedente fallito, analizzalo.
+- Non riproporre la stessa modifica.
+- La nuova soluzione deve essere materialmente differente.
+- Usa la diagnostica del tentativo fallito per capire cosa è andato storto.
 
 Formato obbligatorio:
 
@@ -126,6 +132,29 @@ Formato obbligatorio:
         }
     ]
 }
+"""
+
+    failed_attempt_section = ""
+
+    if previous_failed_edits:
+        failed_attempt_section = f"""
+TENTATIVO PRECEDENTE FALLITO:
+
+MODIFICHE TENTATE:
+{json.dumps(
+    previous_failed_edits,
+    ensure_ascii=False,
+    indent=2
+)}
+
+DIAGNOSTICA DOPO IL TENTATIVO:
+{failed_diagnostics or "Non disponibile"}
+
+IMPORTANTE:
+La modifica precedente è stata annullata automaticamente.
+NON ripetere la stessa soluzione.
+Analizza perché ha peggiorato la diagnostica e proponi
+una soluzione differente.
 """
 
     user_prompt = f"""
@@ -140,6 +169,8 @@ DIAGNOSTICA REALE:
 
 CODICE:
 {code}
+
+{failed_attempt_section}
 """
 
     try:
@@ -165,6 +196,11 @@ CODICE:
         if not content:
             return None
 
+        print(
+            "\n[AI RAW EDIT RESPONSE]\n"
+            + content
+        )
+
         content = content.strip()
 
         # Protezione nel caso il modello aggiunga comunque Markdown
@@ -177,6 +213,10 @@ CODICE:
         edits = data.get("edits")
 
         if not isinstance(edits, list):
+            print(
+                "[AI EDIT ERROR] "
+                "La risposta non contiene una lista 'edits' valida."
+            )
             return None
 
         cleaned_edits = []
@@ -208,6 +248,10 @@ CODICE:
             )
 
         if not cleaned_edits:
+            print(
+                "[AI EDIT ERROR] "
+                "Il modello non ha prodotto nessun edit utilizzabile."
+            )
             return None
 
         return cleaned_edits
@@ -223,3 +267,97 @@ CODICE:
             f"[AI EDIT ERROR]: {error}"
         )
         return None    
+
+def analyze_failed_fix(
+    code: str,
+    file_name: str,
+    project_name: str,
+    diagnostics: str,
+    failed_edits: list[dict[str, str]] | None,
+    failed_diagnostics: str | None
+) -> str:
+
+    system_prompt = """
+Sei il Coding Agent di JARVIS.
+
+Diversi tentativi automatici di correzione sono falliti.
+
+NON devi generare una nuova modifica.
+
+Devi invece:
+- analizzare il problema originale;
+- analizzare il tentativo fallito;
+- spiegare perché la soluzione precedente non ha funzionato;
+- identificare quali informazioni mancano;
+- indicare se il problema potrebbe dipendere da altro codice,
+  typing, import, configurazione o librerie esterne;
+- proporre il prossimo passo diagnostico.
+- NON cambiare il tipo di ritorno dichiarato soltanto per eliminare
+  un errore del type checker.
+- Considera la signature della funzione come un contratto da
+  preservare, salvo prova evidente che sia sbagliata.
+- Se la funzione dichiara tuple[int, int, int, int],
+  il valore restituito deve avere ESATTAMENTE quattro elementi.
+- Prima di proporre una modifica, verifica mentalmente che essa
+  non contraddica direttamente la diagnostica fornita.
+- Non aggiungere o rimuovere elementi arbitrariamente da tuple,
+  liste o argomenti solo per tentare di soddisfare il type checker.
+- Preferisci correggere l'espressione che causa l'incompatibilità
+  invece di allargare il tipo dichiarato.
+
+Rispondi in italiano.
+Sii concreto.
+"""
+
+    user_prompt = f"""
+PROGETTO:
+{project_name}
+
+FILE:
+{file_name}
+
+DIAGNOSTICA ATTUALE:
+{diagnostics}
+
+TENTATIVI FALLITI:
+{failed_edits}
+
+DIAGNOSTICA DOPO IL TENTATIVO:
+{failed_diagnostics}
+
+CODICE:
+{code}
+"""
+
+    try:
+        response = chat(
+            model=MODEL_NAME,
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": user_prompt
+                }
+            ]
+        )
+
+        content = response.message.content
+
+        if not content:
+            return (
+                "Non sono riuscito a capire perché "
+                "le correzioni stanno fallendo."
+            )
+
+        return content.strip()
+
+    except Exception as error:
+        print(f"[AI FAILURE ANALYSIS ERROR]: {error}")
+
+        return (
+            "Non sono riuscito ad analizzare "
+            "il fallimento della correzione."
+        )    

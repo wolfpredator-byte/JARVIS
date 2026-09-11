@@ -22,7 +22,8 @@ from tools.diagnostics import (
 )
 from core.ai import (
     analyze_code,
-    generate_code_edits
+    generate_code_edits,
+    analyze_failed_fix
 )
 from tools.code_edit import (
     prepare_edits,
@@ -62,12 +63,6 @@ def normalize_command(command: str) -> str:
         char
         for char in unicodedata.normalize("NFD", command)
         if unicodedata.category(char) != "Mn"
-    )
-
-    command = "".join(
-    char
-    for char in unicodedata.normalize("NFD", command)
-    if unicodedata.category(char) != "Mn"
     )
 
     return command
@@ -340,6 +335,8 @@ def handle_command(command: str):
         # Se la situazione peggiora,
         # rollback AUTOMATICO
         if after_score > before_score:
+            session.last_failed_edits = session.pending_edits
+            session.last_failed_diagnostics = diagnostics_text
 
             restored = restore_content(
                 session.last_project,
@@ -369,12 +366,18 @@ def handle_command(command: str):
         session.clear_pending_edit()
 
         if after_score == 0:
+            session.last_failed_edits = None
+            session.last_failed_diagnostics = None
+
             return (
                 "Modifica applicata. "
                 "Pyright non rileva più problemi."
             )
 
         if after_score < before_score:
+            session.last_failed_edits = None
+            session.last_failed_diagnostics = None
+
             return (
                 "Modifica applicata. "
                 "La diagnostica è migliorata, "
@@ -392,11 +395,44 @@ def handle_command(command: str):
     # PREPARA STRUCTURED EDIT
     # ----------------------------
 
-    if (
+    retry_requested = (
+        similar_to(command, "riprova")
+        or "prova ancora" in command
+        or "ritenta" in command
+        or "prova un altra soluzione" in command
+        or "prova un'altra soluzione" in command
+    )
+
+    if retry_requested:
+        session.fix_retry_count += 1
+
+        if session.fix_retry_count > session.max_fix_retries:
+            return (
+                "Ho già tentato diverse correzioni senza ottenere "
+                "un risultato affidabile. Non voglio continuare "
+                "a modificare il file alla cieca. "
+                "Serve un'analisi più approfondita."
+            )
+
+    fix_requested = (
         similar_to(command, "sistemalo")
         or "correggilo" in command
         or "risolvi il problema" in command
-    ):
+    )
+
+    if retry_requested or fix_requested:
+
+        if retry_requested:
+            if not session.last_failed_edits:
+                return (
+                    "Non ho un tentativo precedente "
+                    "fallito da cui ripartire."
+                )
+
+            print(
+                "[CODING AGENT] "
+                "Nuovo tentativo basato sul fix precedente."
+            )
 
         if (
             not session.last_project
@@ -427,14 +463,92 @@ def handle_command(command: str):
             before_diagnostics
         )
 
+        # ----------------------------
+        # ESCALATION DOPO PIÙ FALLIMENTI
+        # ----------------------------
+
+        if (
+            retry_requested
+            and session.fix_retry_count >= session.max_fix_retries
+        ):
+            analysis = analyze_failed_fix(
+                code=code,
+                file_name=session.last_file,
+                project_name=session.last_project,
+                diagnostics=diagnostics_text,
+                failed_edits=session.last_failed_edits,
+                failed_diagnostics=session.last_failed_diagnostics
+            )
+
+            print(
+                "\n"
+                + "=" * 60
+                + "\nANALISI FALLIMENTO\n"
+                + "=" * 60
+                + "\n"
+                + analysis
+                + "\n"
+                + "=" * 60
+            )
+
+            return JarvisResponse(
+                display=analysis,
+                speech=(
+                    "I tentativi automatici non stanno risolvendo "
+                    "il problema. Ho analizzato perché stanno "
+                    "fallendo e ti ho mostrato i dettagli nel terminale."
+                )
+            )
+
         edits = generate_code_edits(
             code=code,
             file_name=session.last_file,
             project_name=session.last_project,
-            diagnostics=diagnostics_text
+            diagnostics=diagnostics_text,
+            previous_failed_edits=(
+                session.last_failed_edits
+                if retry_requested
+                else None
+            ),
+            failed_diagnostics=(
+                session.last_failed_diagnostics
+                if retry_requested
+                else None
+            )
         )
 
         if not edits:
+
+            if retry_requested:
+                analysis = analyze_failed_fix(
+                    code=code,
+                    file_name=session.last_file,
+                    project_name=session.last_project,
+                    diagnostics=diagnostics_text,
+                    failed_edits=session.last_failed_edits,
+                    failed_diagnostics=session.last_failed_diagnostics
+                )
+
+                print(
+                    "\n"
+                    + "=" * 60
+                    + "\nANALISI DOPO RETRY FALLITO\n"
+                    + "=" * 60
+                    + "\n"
+                    + analysis
+                    + "\n"
+                    + "=" * 60
+                )
+
+                return JarvisResponse(
+                    display=analysis,
+                    speech=(
+                        "Non sono riuscito a generare una nuova "
+                        "correzione affidabile. Ho interrotto i tentativi "
+                        "e ho analizzato il problema più a fondo."
+                    )
+                )
+
             return (
                 "Non sono riuscito a generare "
                 "una modifica valida."
@@ -739,6 +853,9 @@ def handle_command(command: str):
         session.last_request = command
         session.last_diagnostics = diagnostics_text
         session.last_ai_response = response
+        session.fix_retry_count = 0
+        session.last_failed_edits = None
+        session.last_failed_diagnostics = None
 
         spoken_response = build_spoken_summary(
             full_text=response,
@@ -780,3 +897,4 @@ def handle_command(command: str):
         )
 
     return "Comando non riconosciuto."
+

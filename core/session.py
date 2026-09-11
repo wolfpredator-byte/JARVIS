@@ -15,6 +15,12 @@ class JarvisSession:
     pending_diff: str | None = None
     pending_before_score: int | None = None
 
+    last_failed_edits: list[dict[str, str]] | None = None
+    last_failed_diagnostics: str | None = None
+
+    fix_retry_count: int = 0
+    max_fix_retries: int = 3
+
     def clear_pending_edit(self):
         self.pending_edits = None
         self.pending_original_content = None
